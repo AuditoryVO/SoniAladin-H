@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SoniAladin</title>
+    <script type="text/javascript" src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js" charset="utf-8"></script>
+    <style>
+        body { margin: 0; background: #111; color: #eee; font-family: sans-serif; overflow: hidden; width: 100vw; height: 100vh; display: flex; flex-direction: column; }
+        
+        #controls { display: flex; gap: 15px; padding: 8px 15px; background: rgba(34, 34, 34, 0.9); width: 100%; box-sizing: border-box; align-items: center; justify-content: center; border-bottom: 2px solid #444; z-index: 10; flex-wrap: wrap; }
+        input { padding: 5px 8px; background: #333; color: #fff; border: 1px solid #aa00ff; border-radius: 4px; }
+        
+        #action-buttons { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+        #action-buttons button { background: #333; color: #fff; border: 1px solid #aa00ff; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
+        #action-buttons button:hover { background: #a200ff; }
+        #voice-control-btn.active { background: #a200ff; border-color: #d175ff; }
+
+        #map-container { position: relative; width: 100vw; flex-grow: 1; }
+        #aladin-lite-div { width: 100%; height: 100%; }
+        
+        /* Updated scan-line for horizontal exploration */
+        #scan-line { position: absolute; left: 0px; top: 0; width: 2px; height: 100vh; background-color: rgba(140, 0, 255, 0.7); box-shadow: 0 0 4px rgb(140, 0, 255); pointer-events: none; display: none; z-index: 5; }
+        #status { font-weight: bold; color: #a200ff; margin: 0 10px; font-size: 0.9rem; }
+
+        /* Welcome Screen Overlay */
+        #welcome-screen { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(17, 17, 17, 0.65); z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 20px; box-sizing: border-box; }
+        #welcome-screen h1 { color: #a200ff; margin-bottom: 5px; font-size: 2rem; }
+        #welcome-screen p.subtitle { color: #aaa; margin-bottom: 20px; font-size: 1rem; }
+        
+        #play-audio-btn { background: #333; color: #fff; border: 1px solid #ae00ff; padding: 8px 16px; border-radius: 4px; margin-bottom: 20px; cursor: pointer; font-size: 0.9rem; }
+        #play-audio-btn:hover { background: #aa00ff; }
+
+        .controls-box { background: #222; border: 1px solid #444; padding: 20px; border-radius: 8px; margin-bottom: 25px; max-width: 580px; text-align: left; font-size: 0.9rem; line-height: 1.6; }
+        .controls-box ul { margin: 0; padding-left: 20px; }
+        .controls-box li { margin-bottom: 6px; }
+        
+        #start-prompt { cursor: pointer; font-family: inherit; font-size: 1.2rem; color: #fff; font-weight: bold; background: rgba(166, 0, 255, 0.2); border: 2px solid #a200ff; padding: 12px 24px; border-radius: 6px; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { opacity: 0.8; } 50% { opacity: 1; transform: scale(1.02); } 100% { opacity: 0.8; } }
+    </style>
+</head>
+<body>
+
+    <!-- Welcome Screen Overlay -->
+    <div id="welcome-screen">
+        <h1>SoniAladin</h1>
+        <p class="subtitle" id="ui-subtitle">Exploring Aladin Sky Atlas through sound</p>
+        
+        <button id="play-audio-btn" aria-label="Play Audio Instructions">Play Audio Instructions</button>
+
+        <div class="controls-box">
+            <strong id="ui-controlsSummary">Key Controls Summary:</strong>
+            <ul>
+                <li id="ui-ctrlVoice"><strong>Simplified Voice Control:</strong> Say "start", "pause", or "stop"</li>
+                <li id="ui-ctrlRight"><strong>Right Arrow:</strong> Start or continue right-wise exploration</li>
+                <li id="ui-ctrlLeft"><strong>Left Arrow:</strong> Start or continue left-wise exploration</li>
+                <li id="ui-ctrlDown"><strong>Down Arrow (Press / Double):</strong> Pause or Stop & Reset</li>
+                <li id="ui-ctrlUp"><strong>Up Arrow:</strong> Explore the object in SIMBAD</li>
+                <li id="ui-ctrlZoom"><strong>+ / - Keys:</strong> ALADIN Zoom in or Zoom out</li>
+                <li id="ui-ctrlThresh"><strong>SHIFT + (+ / -):</strong> Increase or reduce low threshold</li>
+                <li id="ui-ctrlSlow"><strong>SHIFT + Control Key:</strong> Slow down exploration (-25%)</li>
+                <li id="ui-ctrlFast"><strong>SHIFT + Command Key:</strong> Speed up exploration (+25%)</li>
+                <li id="ui-ctrlReset"><strong>SHIFT + Option / Alt Key:</strong> Reset exploration speed</li>
+            </ul>
+        </div>
+        <button id="start-prompt" aria-label="Start SoniAladin">Click here or press "space bar" to start SoniAladin</button>
+    </div>
+
+    <div id="controls">
+        <div>
+            <label id="ui-targetLabel" for="targetInput">Target: </label>
+            <input type="text" id="targetInput" placeholder="Type the name of an object" aria-label="Search target object">
+        </div>
+        <div id="action-buttons">
+            <button id="voice-control-btn" onclick="toggleVoiceControl()" aria-label="Toggle Voice Control">Voice: OFF</button>
+            <button id="btn-start" onclick="handleTouchStart()" aria-label="Play Sonification">Play</button>
+            <button id="btn-pause" onclick="pauseSonification()" aria-label="Pause Sonification">Pause</button>
+            <button id="btn-stop" onclick="stopAndResetSonification(true)" aria-label="Stop Sonification">Stop</button>
+        </div>
+        <div id="status" role="status" aria-live="polite" aria-atomic="true">Status: Waiting to start...</div>
+    </div>
+
+    <div id="map-container">
+        <div id="aladin-lite-div"></div>
+        <div id="scan-line"></div>
+    </div>
+
+    <script>
+        // --- Internationalization (i18n) Logic ---
+        const i18n = {
+            en: {
+                welcomeAudio: "Welcome to SoniAladin. Exploring Aladin Sky Atlas through sound. Use the keyboard or activate voice control to start, pause, and stop sonification. Key controls summary: Right Arrow for right-wise exploration. Left Arrow for left-wise exploration. Down Arrow to pause or stop and reset. Up Arrow to explore the object in SIMBAD. Plus and minus keys for zoom in or out. Shift plus Control key to slow down. Shift plus Command key to speed up. Shift plus Option or Alt key to reset speed. Shift plus plus or minus to adjust the low threshold. Press space bar to start SoniAladin.",
+                started: "Exploring",
+                readyStatus: "Status: Ready. Use buttons or voice control to begin.",
+                continuing: "Continuing Sonification",
+                starting: "Starting SoniAladin",
+                voiceOnStatus: "Voice control activated. Say play, pause, or stop.",
+                voiceOffStatus: "Voice control deactivated",
+                slowingDown: "Slowing down",
+                defaultSpeed: "Default speed",
+                speedingUp: "Speeding up",
+                minSpeed: "minimum speed",
+                maxSpeed: "maximum speed",
+                thresholdInc: "Threshold increased to",
+                thresholdDec: "Threshold decreased to",
+                zoomIn: "Zoom in",
+                zoomOut: "Zoom out",
+                rightExploration: "right-wise",
+                leftExploration: "left-wise",
+                exploringSimbad: "Exploring",
+                inSimbad: "in simbad",
+                oneThird: "One third",
+                twoThirds: "Two thirds",
+                finished: "Sonification finished",
+                paused: "Sonification paused",
+                stopped: "Sonification stopped",
+                heard: "Heard",
+                speedStr: "Speed",
+                statusStr: "Status",
+                // UI elements
+                subtitle: "Exploring Aladin Sky Atlas through sound",
+                playAudioBtn: "Play Audio Instructions",
+                controlsSummary: "Key Controls Summary:",
+                ctrlVoice: "<strong>Simplified Voice Control:</strong> Say 'start', 'pause', or 'stop' (Requires microphone access)",
+                ctrlVoiceUnsupported: "<strong>Simplified Voice Control:</strong> Not supported in your current browser (Try Chrome/Edge/Safari)",
+                ctrlRight: "<strong>Right Arrow:</strong> Start or continue right-wise exploration",
+                ctrlLeft: "<strong>Left Arrow:</strong> Start or continue left-wise exploration",
+                ctrlDown: "<strong>Down Arrow (Press / Double):</strong> Pause or Stop & Reset",
+                ctrlUp: "<strong>Up Arrow:</strong> Explore the object in SIMBAD",
+                ctrlZoom: "<strong>+ / - Keys:</strong> ALADIN Zoom in or Zoom out",
+                ctrlThresh: "<strong>SHIFT + (+ / -):</strong> Increase or reduce low threshold",
+                ctrlSlow: "<strong>SHIFT + Control Key:</strong> Slow down exploration (-25%)",
+                ctrlFast: "<strong>SHIFT + Command Key:</strong> Speed up exploration (+25%)",
+                ctrlReset: "<strong>SHIFT + Option / Alt Key:</strong> Reset exploration speed (Default speed)",
+                startPrompt: "Click here or press 'space bar' to start SoniAladin",
+                targetLabel: "Target: ",
+                targetPlaceholder: "Type the name of an object",
+                btnVoiceOff: "Voice: OFF",
+                btnVoiceOn: "Voice: ON",
+                btnPlay: "Play",
+                btnPause: "Pause",
+                btnStop: "Stop",
+                statusWaiting: "Status: Waiting to start...",
+                navigatedTo: "Navigated to"
+            },
+            es: {
+                welcomeAudio: "Bienvenido a SoniAladin. Explorando el Atlas Celeste Aladin a través del sonido. Usa el teclado o activa el control por voz para iniciar, pausar y detener la sonificación. Resumen de controles: Flecha derecha para exploración hacia la derecha. Flecha izquierda para exploración hacia la izquierda. Flecha abajo para pausar o detener y reiniciar. Flecha arriba para explorar el objeto en SIMBAD. Teclas más y menos para acercar o alejar. Mayús más Control para ir más lento. Mayús más Comando para ir más rápido. Mayús más Opción o Alt para velocidad por defecto. Mayús más tecla más o menos para ajustar el umbral bajo. Presiona la barra espaciadora para iniciar.",
+                started: "Explorando",
+                readyStatus: "Estado: Listo. Usa los botones o el control por voz para comenzar.",
+                continuing: "Continuando sonificación",
+                starting: "Iniciando SoniAladin",
+                voiceOnStatus: "Control por voz activado. Di reproducir, pausar o detener.",
+                voiceOffStatus: "Control por voz desactivado",
+                slowingDown: "Reduciendo velocidad",
+                defaultSpeed: "Velocidad por defecto",
+                speedingUp: "Aumentando velocidad",
+                minSpeed: "velocidad mínima",
+                maxSpeed: "velocidad máxima",
+                thresholdInc: "Umbral aumentado a",
+                thresholdDec: "Umbral reducido a",
+                zoomIn: "Acercar",
+                zoomOut: "Alejar",
+                rightExploration: "hacia la derecha",
+                leftExploration: "hacia la izquierda",
+                exploringSimbad: "Explorando",
+                inSimbad: "en simbad",
+                oneThird: "Un tercio",
+                twoThirds: "Dos tercios",
+                finished: "Sonificación terminada",
+                paused: "Sonificación pausada",
+                stopped: "Sonificación detenida",
+                heard: "Escuchado",
+                speedStr: "Velocidad",
+                statusStr: "Estado",
+                // UI elements
+                subtitle: "Explorando el Atlas Celeste Aladin a través del sonido",
+                playAudioBtn: "Reproducir Instrucciones de Audio",
+                controlsSummary: "Resumen de Controles:",
+                ctrlVoice: "<strong>Control por Voz Simplificado:</strong> Di 'iniciar', 'pausar' o 'detener' (Requiere micrófono)",
+                ctrlVoiceUnsupported: "<strong>Control por Voz Simplificado:</strong> No compatible en tu navegador actual (Prueba Chrome/Edge/Safari)",
+                ctrlRight: "<strong>Flecha Derecha:</strong> Iniciar o continuar exploración hacia la derecha",
+                ctrlLeft: "<strong>Flecha Izquierda:</strong> Iniciar o continuar exploración hacia la izquierda",
+                ctrlDown: "<strong>Flecha Abajo (Presionar / Doble):</strong> Pausar o Detener y Reiniciar",
+                ctrlUp: "<strong>Flecha Arriba:</strong> Explorar el objeto en SIMBAD",
+                ctrlZoom: "<strong>Teclas + / -:</strong> Acercar o alejar ALADIN",
+                ctrlThresh: "<strong>MAYÚS + (+ / -):</strong> Aumentar o reducir umbral bajo",
+                ctrlSlow: "<strong>MAYÚS + Control:</strong> Reducir velocidad de exploración (-25%)",
+                ctrlFast: "<strong>MAYÚS + Comando:</strong> Aumentar velocidad de exploración (+25%)",
+                ctrlReset: "<strong>MAYÚS + Opción / Alt:</strong> Restablecer velocidad de exploración (Por defecto)",
+                startPrompt: "Haz clic aquí o presiona la barra espaciadora para iniciar",
+                targetLabel: "Objetivo: ",
+                targetPlaceholder: "Escribe el nombre de un objeto",
+                btnVoiceOff: "Voz: DESACT.",
+                btnVoiceOn: "Voz: ACTIVA",
+                btnPlay: "Reproducir",
+                btnPause: "Pausar",
+                btnStop: "Detener",
+                statusWaiting: "Estado: Esperando para iniciar...",
+                navigatedTo: "Navegado a"
+            },
+            ca: {
+                welcomeAudio: "Benvingut a SoniAladin. Explorant l'Atles Celest Aladin a través del so. Utilitza el teclat o activa el control per veu per iniciar, pausar i aturar la sonificació. Resum de controls: Fletxa dreta per a exploració cap a la dreta. Fletxa esquerra per a exploració cap a l'esquerra. Fletxa avall per pausar o aturar i reiniciar. Fletxa amunt per explorar l'objecte a SIMBAD. Tecles més i menys per apropar o allunyar. Majúscules més Control per anar més a poc a poc. Majúscules més Comandament per anar més ràpid. Majúscules més Opció o Alt per a la velocitat per defecte. Majúscules més tecla més o menys per ajustar el llindar baix. Prem la barra espaiadora per iniciar.",
+                started: "Explorant",
+                readyStatus: "Estat: Llest. Utilitza els botons o el control per veu per començar.",
+                continuing: "Continuant sonificació",
+                starting: "Iniciant SoniAladin",
+                voiceOnStatus: "Control per veu activat. Digues reproduir, pausar o aturar.",
+                voiceOffStatus: "Control per veu desactivat",
+                slowingDown: "Reduint velocitat",
+                defaultSpeed: "Velocitat per defecte",
+                speedingUp: "Augmentant velocitat",
+                minSpeed: "velocitat mínima",
+                maxSpeed: "velocitat màxima",
+                thresholdInc: "Llindar augmentat a",
+                thresholdDec: "Llindar reduït a",
+                zoomIn: "Apropar",
+                zoomOut: "Allunyar",
+                rightExploration: "cap a la dreta",
+                leftExploration: "cap a l'esquerra",
+                exploringSimbad: "Explorant",
+                inSimbad: "a simbad",
+                oneThird: "Un terç",
+                twoThirds: "Dos terços",
+                finished: "Sonificació acabada",
+                paused: "Sonificació pausada",
+                stopped: "Sonificació aturada",
+                heard: "Escoltat",
+                speedStr: "Velocitat",
+                statusStr: "Estat",
+                // UI elements
+                subtitle: "Explorant l'Atles Celest Aladin a través del so",
+                playAudioBtn: "Reproduir Instruccions d'Àudio",
+                controlsSummary: "Resum de Controls:",
+                ctrlVoice: "<strong>Control per Veu Simplificat:</strong> Digues 'iniciar', 'pausar' o 'aturar' (Requereix micròfon)",
+                ctrlVoiceUnsupported: "<strong>Control per Veu Simplificat:</strong> No compatible amb el teu navegador actual (Prova Chrome/Edge/Safari)",
+                ctrlRight: "<strong>Fletxa Dreta:</strong> Iniciar o continuar exploració cap a la dreta",
+                ctrlLeft: "<strong>Fletxa Esquerra:</strong> Iniciar o continuar exploració cap a l'esquerra",
+                ctrlDown: "<strong>Fletxa Avall (Prémer / Doble):</strong> Pausar o Aturar i Reiniciar",
+                ctrlUp: "<strong>Fletxa Amunt:</strong> Explorar l'objecte a SIMBAD",
+                ctrlZoom: "<strong>Tecles + / -:</strong> Apropar o allunyar ALADIN",
+                ctrlThresh: "<strong>MAJ + (+ / -):</strong> Augmentar o reduir llindar baix",
+                ctrlSlow: "<strong>MAJ + Control:</strong> Reduir velocitat d'exploració (-25%)",
+                ctrlFast: "<strong>MAJ + Comandament:</strong> Augmentar velocitat d'exploració (+25%)",
+                ctrlReset: "<strong>MAJ + Opció / Alt:</strong> Restablir velocitat d'exploració (Per defecte)",
+                startPrompt: "Fes clic aquí o prem la barra espaiadora per iniciar",
+                targetLabel: "Objectiu: ",
+                targetPlaceholder: "Escriu el nom d'un objecte",
+                btnVoiceOff: "Veu: DESACT.",
+                btnVoiceOn: "Veu: ACTIVA",
+                btnPlay: "Reproduir",
+                btnPause: "Pausar",
+                btnStop: "Aturar",
+                statusWaiting: "Estat: Esperant per iniciar...",
+                navigatedTo: "Navegat a"
+            }
+        };
+
+        // Detect OS/Browser Language
+        let currentLang = 'en'; 
+        const userLang = (navigator.language || navigator.userLanguage).slice(0, 2).toLowerCase();
+        if (['en', 'es', 'ca'].includes(userLang)) {
+            currentLang = userLang;
+        }
+
+        // Translation helper function
+        function t(key) {
+            return i18n[currentLang][key] || i18n['en'][key];
+        }
+        
+        // Feature detection for Web Speech API
+        const SpeechRecognitionNative = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const supportsSpeech = !!SpeechRecognitionNative;
+
+        // Apply translations to the UI on load
+        document.addEventListener('DOMContentLoaded', () => {
+            document.documentElement.lang = currentLang;
+            document.getElementById('ui-subtitle').innerHTML = t('subtitle');
+            document.getElementById('play-audio-btn').innerHTML = t('playAudioBtn');
+            document.getElementById('ui-controlsSummary').innerHTML = t('controlsSummary');
+            
+            // Adjust Voice Control UI based on browser support
+            if (!supportsSpeech) {
+                document.getElementById('ui-ctrlVoice').innerHTML = t('ctrlVoiceUnsupported');
+                document.getElementById('voice-control-btn').style.display = 'none';
+            } else {
+                document.getElementById('ui-ctrlVoice').innerHTML = t('ctrlVoice');
+            }
+
+            document.getElementById('ui-ctrlRight').innerHTML = t('ctrlRight');
+            document.getElementById('ui-ctrlLeft').innerHTML = t('ctrlLeft');
+            document.getElementById('ui-ctrlDown').innerHTML = t('ctrlDown');
+            document.getElementById('ui-ctrlUp').innerHTML = t('ctrlUp');
+            document.getElementById('ui-ctrlZoom').innerHTML = t('ctrlZoom');
+            document.getElementById('ui-ctrlThresh').innerHTML = t('ctrlThresh');
+            document.getElementById('ui-ctrlSlow').innerHTML = t('ctrlSlow');
+            document.getElementById('ui-ctrlFast').innerHTML = t('ctrlFast');
+            document.getElementById('ui-ctrlReset').innerHTML = t('ctrlReset');
+            document.getElementById('start-prompt').innerHTML = t('startPrompt');
+            document.getElementById('ui-targetLabel').innerHTML = t('targetLabel');
+            document.getElementById('targetInput').placeholder = t('targetPlaceholder');
+            document.getElementById('voice-control-btn').innerHTML = t('btnVoiceOff');
+            document.getElementById('btn-start').innerHTML = t('btnPlay');
+            document.getElementById('btn-pause').innerHTML = t('btnPause');
+            document.getElementById('btn-stop').innerHTML = t('btnStop');
+            document.getElementById('status').innerHTML = t('statusWaiting');
+        });
+
+        // --- Core Application Logic ---
+        let aladin;
+        let audioCtx = null;
+        let isSonifying = false;
+        let scanInterval;
+        let speedMultiplier = 0.8; 
+        const BASE_DELAY = 50;     
+        let scanDirection = 1; 
+        let currentX = 0;
+        let reverberationNode = null;
+        let downArrowClickCount = 0;
+        let downArrowTimer = null;
+        let selectedFemaleVoice = null;
+        let lastPianoXMap = {}; 
+        let lastViolinXMap = {}; 
+        let currentTargetName = 'ngc 660';
+        let welcomeActive = true;
+        let recognition = null;
+        let isVoiceControlActive = false;
+
+        const high_threshold = 100;
+        let low_threshold = 40;
+        const resolution = 4;
+        const horizontalCooldown = 4; 
+        const BOUNDARY_MARGIN = 12; 
+
+        function initAudio() {
+            if (!audioCtx) {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioContext();
+
+                try {
+                    reverberationNode = audioCtx.createConvolver();
+                    const rate = audioCtx.sampleRate;
+                    const length = rate * 1.2;
+                    const impulse = audioCtx.createBuffer(2, length, rate);
+                    const left = impulse.getChannelData(0);
+                    const right = impulse.getChannelData(1);
+
+                    for (let i = 0; i < length; i++) {
+                        const decay = Math.exp(-i / (rate * 0.25));
+                        left[i] = (Math.random() * 2 - 1) * decay;
+                        right[i] = (Math.random() * 2 - 1) * decay;
+                    }
+
+                    reverberationNode.buffer = impulse;
+                    
+                    const wetGain = audioCtx.createGain();
+                    wetGain.gain.value = 1.8;
+                    reverberationNode.connect(wetGain);
+                    wetGain.connect(audioCtx.destination);
+                } catch (e) {
+                    console.error("Reverb initialization error:", e);
+                }
+            }
+            
+            if (audioCtx.state === 'suspended') {
+                const resumePromise = audioCtx.resume();
+                if (resumePromise !== undefined) {
+                    resumePromise.catch(e => console.warn("AudioContext resume error:", e));
+                }
+            }
+        }
+
+        function loadVoices() {
+            if ('speechSynthesis' in window) {
+                const voices = window.speechSynthesis.getVoices();
+                selectedFemaleVoice = voices.find(v => v.lang.startsWith(currentLang) && 
+                    (v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('google') || v.name.toLowerCase().includes('natural'))) 
+                    || voices.find(v => v.lang.startsWith(currentLang)) 
+                    || voices[0];
+            }
+        }
+
+        if ('speechSynthesis' in window) {
+            loadVoices();
+            if (window.speechSynthesis.onvoiceschanged !== undefined) {
+                window.speechSynthesis.onvoiceschanged = loadVoices;
+            }
+        }
+
+        function speakMessage(text) {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                
+                let spokenText = text;
+                if (currentLang === 'ca') {
+                    spokenText = spokenText.replace(/\b[mM]\s*(\d+)/g, 'Ema $1');
+                } else if (currentLang === 'es') {
+                    spokenText = spokenText.replace(/\b[mM]\s*(\d+)/g, 'Eme $1');
+                }
+
+                const utterance = new SpeechSynthesisUtterance(spokenText);
+                
+                if (currentLang === 'es') utterance.lang = 'es-ES';
+                else if (currentLang === 'ca') utterance.lang = 'ca-ES';
+                else utterance.lang = 'en-US';
+
+                if (selectedFemaleVoice) {
+                    utterance.voice = selectedFemaleVoice;
+                }
+                utterance.rate = 1.0;
+                utterance.pitch = 1.1; 
+                utterance.volume = 0.5;
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
+        document.getElementById('play-audio-btn').addEventListener('click', () => {
+            initAudio();
+            speakMessage(t('welcomeAudio'));
+        });
+
+        function dismissWelcomeScreen() {
+            initAudio();
+            welcomeActive = false;
+            document.getElementById('welcome-screen').style.display = 'none';
+            speakMessage(t('starting'));
+            document.getElementById('status').innerText = t('readyStatus');
+            targetInput.focus();
+        }
+
+        document.getElementById('start-prompt').addEventListener('click', (e) => {
+            if (welcomeActive) {
+                dismissWelcomeScreen();
+                e.preventDefault();
+            }
+        });
+
+        function handleTouchStart() {
+            initAudio();
+            startSonification();
+        }
+
+        function toggleVoiceControl() {
+            initAudio();
+            if (!supportsSpeech) {
+                alert("Speech recognition is not supported in this browser.");
+                return;
+            }
+
+            const btn = document.getElementById('voice-control-btn');
+
+            if (!isVoiceControlActive) {
+                recognition = new SpeechRecognitionNative();
+                recognition.continuous = true;
+                recognition.interimResults = false;
+                
+                if (currentLang === 'es') recognition.lang = 'es-ES';
+                else if (currentLang === 'ca') recognition.lang = 'ca-ES';
+                else recognition.lang = 'en-US';
+
+                recognition.onresult = (event) => {
+                    const lastResult = event.results[event.results.length - 1];
+                    const command = lastResult[0].transcript.trim().toLowerCase();
+                    document.getElementById('status').innerText = `${t('heard')}: "${command}"`;
+
+                    let isStart = command.includes('start') || command.includes('play') || command.includes('iniciar') || command.includes('reproducir') || command.includes('reproduir');
+                    let isPause = command.includes('pause') || command.includes('pausar');
+                    let isStop = command.includes('stop') || command.includes('reset') || command.includes('detener') || command.includes('aturar') || command.includes('reiniciar');
+
+                    if (isStart) {
+                        handleTouchStart();
+                    } else if (isPause) {
+                        pauseSonification();
+                    } else if (isStop) {
+                        stopAndResetSonification(true);
+                    }
+                };
+
+                recognition.onerror = (event) => {
+                    console.error("Speech recognition error:", event.error);
+                    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+                        isVoiceControlActive = false;
+                        btn.classList.remove('active');
+                        btn.textContent = t('btnVoiceOff');
+                        speakMessage(t('voiceOffStatus'));
+                    }
+                };
+
+                recognition.onend = () => {
+                    if (isVoiceControlActive) {
+                        try { recognition.start(); } catch(e) { console.warn("Recognition restart failed", e); } 
+                    }
+                };
+
+                try {
+                    recognition.start();
+                    isVoiceControlActive = true;
+                    btn.classList.add('active');
+                    btn.textContent = t('btnVoiceOn');
+                    speakMessage(t('voiceOnStatus'));
+                } catch(e) {
+                    console.error("Failed to start speech recognition", e);
+                }
+            } else {
+                if (recognition) {
+                    recognition.stop();
+                }
+                isVoiceControlActive = false;
+                btn.classList.remove('active');
+                btn.textContent = t('btnVoiceOff');
+                speakMessage(t('voiceOffStatus'));
+            }
+        }
+
+        function playTone(freq, type = 'piano', duration = 0.1, pan = 0, brightness = 255) {
+            initAudio();
+            if (!audioCtx) return;
+            try {
+                const now = audioCtx.currentTime;
+                let masterGain = audioCtx.createGain();
+                let volScale = Math.max(0, Math.min(1, brightness / 255));
+                
+                let panner = null;
+                if (audioCtx.createStereoPanner) {
+                    panner = audioCtx.createStereoPanner();
+                    panner.pan.setValueAtTime(Math.max(-1, Math.min(1, pan)), now);
+                    masterGain.connect(panner);
+                    panner.connect(audioCtx.destination);
+                    if (reverberationNode) {
+                        panner.connect(reverberationNode);
+                    }
+                } else {
+                    masterGain.connect(audioCtx.destination);
+                    if (reverberationNode) {
+                        masterGain.connect(reverberationNode);
+                    }
+                }
+
+                if (type === 'piano') {
+                    masterGain.gain.setValueAtTime(0, now);
+                    masterGain.gain.linearRampToValueAtTime(0.15 * volScale, now + 0.005);
+                    masterGain.gain.exponentialRampToValueAtTime(0.0001, now + duration * 3.5);
+
+                    let filter = audioCtx.createBiquadFilter();
+                    filter.type = 'lowpass';
+                    filter.frequency.setValueAtTime(freq * 5, now);
+                    filter.frequency.exponentialRampToValueAtTime(freq, now + duration * 2.0);
+                    filter.connect(masterGain);
+
+                    [1, 2, 3, 4].forEach((harmonic, index) => {
+                        let osc = audioCtx.createOscillator();
+                        let harmonicGain = audioCtx.createGain();
+                        osc.type = index === 0 ? 'triangle' : 'sine';
+                        
+                        let freqMultiplier = harmonic + (harmonic * harmonic * 0.0002);
+                        osc.frequency.setValueAtTime(freq * freqMultiplier, now);
+                        
+                        harmonicGain.gain.setValueAtTime((1 / Math.pow(index + 1, 1.4)), now);
+                        
+                        osc.connect(harmonicGain);
+                        harmonicGain.connect(filter);
+                        osc.start(now);
+                        osc.stop(now + duration * 3.5);
+                    });
+
+                } else if (type === 'violin') {
+                    masterGain.gain.setValueAtTime(0, now);
+                    masterGain.gain.linearRampToValueAtTime(0.08 * volScale, now + 0.08); 
+                    masterGain.gain.exponentialRampToValueAtTime(0.0001, now + duration * 2.5);
+
+                    let filter = audioCtx.createBiquadFilter();
+                    filter.type = 'bandpass';
+                    filter.frequency.setValueAtTime(freq * 1.5, now);
+                    filter.Q.value = 1.2;
+                    filter.connect(masterGain);
+
+                    let osc = audioCtx.createOscillator();
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(freq, now);
+
+                    let vibrato = audioCtx.createOscillator();
+                    let vibratoGain = audioCtx.createGain();
+                    vibrato.frequency.setValueAtTime(5.5, now);
+                    vibratoGain.gain.setValueAtTime(0, now); 
+                    vibratoGain.gain.linearRampToValueAtTime(freq * 0.015, now + 0.15); 
+
+                    vibrato.connect(vibratoGain);
+                    vibratoGain.connect(osc.frequency);
+
+                    osc.connect(filter);
+                    
+                    let dryGain = audioCtx.createGain();
+                    dryGain.gain.value = 0.6;
+                    osc.connect(dryGain);
+                    dryGain.connect(masterGain);
+
+                    vibrato.start(now);
+                    osc.start(now);
+                    vibrato.stop(now + duration * 2.5);
+                    osc.stop(now + duration * 2.5);
+                }
+            } catch (e) {
+                console.error("Audio error:", e);
+            }
+        }
+
+        if (typeof A !== 'undefined') {
+            A.init.then(() => {
+                aladin = A.aladin('#aladin-lite-div', {
+                    target: currentTargetName, 
+                    fov: 0.30, 
+                    survey: 'P/DSS2/color'
+                });
+            });
+        } else {
+            document.getElementById('status').innerText = "Error: Aladin script failed to load from CDN.";
+        }
+
+        const targetInput = document.getElementById('targetInput');
+
+        document.addEventListener('click', () => {
+            if (!welcomeActive && document.activeElement !== targetInput) {
+                targetInput.focus();
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            initAudio();
+            if (welcomeActive) {
+                if (e.key === ' ' || e.code === 'Space') {
+                    dismissWelcomeScreen();
+                    e.preventDefault();
+                }
+                return; 
+            }
+
+            if (e.shiftKey && (e.key === 'Control' || e.ctrlKey)) {
+                speedMultiplier *= 1.25;
+                if (speedMultiplier >= 100) {
+                    speedMultiplier = 100;
+                    speakMessage(t('minSpeed'));
+                    document.getElementById('status').innerText = `${t('speedStr')}: ${t('minSpeed')} (x0.01)`;
+                } else {
+                    speakMessage(t('slowingDown'));
+                    document.getElementById('status').innerText = `${t('speedStr')}: ${t('slowingDown')} (x${(1/speedMultiplier).toFixed(2)})`;
+                }
+                e.preventDefault();
+            } else if (e.shiftKey && (e.key === 'Alt' || e.key === 'Option' || e.altKey)) {
+                speedMultiplier = 1.0; 
+                speakMessage(t('defaultSpeed'));
+                document.getElementById('status').innerText = `${t('speedStr')}: ${t('defaultSpeed')} (x1.00)`;
+                e.preventDefault();
+            } else if (e.shiftKey && (e.key === 'Meta' || e.metaKey)) {
+                const minMultiplier = 16 / BASE_DELAY; 
+                speedMultiplier *= 0.75;
+                if (speedMultiplier <= minMultiplier) {
+                    speedMultiplier = minMultiplier;
+                    speakMessage(t('maxSpeed'));
+                    document.getElementById('status').innerText = `${t('speedStr')}: ${t('maxSpeed')} (x${(1/speedMultiplier).toFixed(2)})`;
+                } else {
+                    speakMessage(t('speedingUp'));
+                    document.getElementById('status').innerText = `${t('speedStr')}: ${t('speedingUp')} (x${(1/speedMultiplier).toFixed(2)})`;
+                }
+                e.preventDefault();
+            } else if (e.shiftKey && (e.key === '+' || e.key === '*' || e.key === 'Add')) {
+                low_threshold = Math.min(high_threshold, low_threshold + 5);
+                speakMessage(`${t('thresholdInc')} ${low_threshold}`);
+                document.getElementById('status').innerText = `${t('statusStr')}: ${t('thresholdInc')} ${low_threshold}`;
+                e.preventDefault();
+            } else if (e.shiftKey && (e.key === '-' || e.key === '_' || e.key === 'Subtract')) {
+                low_threshold = Math.max(0, low_threshold - 5);
+                speakMessage(`${t('thresholdDec')} ${low_threshold}`);
+                document.getElementById('status').innerText = `${t('statusStr')}: ${t('thresholdDec')} ${low_threshold}`;
+                e.preventDefault();
+            } else if (e.key === '+' || e.key === '*' || e.key === 'Add') {
+                if (aladin) {
+                    let fov = aladin.getFov();
+                    let currentFov = Array.isArray(fov) ? fov[0] : (typeof fov === 'number' ? fov : 0.5);
+                    aladin.setFoV(currentFov * 0.75);
+                    speakMessage(t('zoomIn'));
+                    document.getElementById('status').innerText = `${t('statusStr')}: ${t('zoomIn')}`;
+                }
+                e.preventDefault();
+            } else if (e.key === '-' || e.key === '_' || e.key === 'Subtract') {
+                if (aladin) {
+                    let fov = aladin.getFov();
+                    let currentFov = Array.isArray(fov) ? fov[0] : (typeof fov === 'number' ? fov : 0.5);
+                    aladin.setFoV(currentFov * 1.33);
+                    speakMessage(t('zoomOut'));
+                    document.getElementById('status').innerText = `${t('statusStr')}: ${t('zoomOut')}`;
+                }
+                e.preventDefault();
+            } else if (e.key === 'ArrowDown') {
+                downArrowClickCount++;
+                if (downArrowClickCount === 1) {
+                    downArrowTimer = setTimeout(() => {
+                        if (downArrowClickCount === 1) {
+                            pauseSonification();
+                        }
+                        downArrowClickCount = 0;
+                    }, 300); 
+                } else if (downArrowClickCount === 2) {
+                    clearTimeout(downArrowTimer);
+                    stopAndResetSonification(true);
+                    downArrowClickCount = 0;
+                }
+                e.preventDefault();
+            } else if (e.key === 'ArrowUp') {
+                let simbadUrl = `https://simbad.u-strasbg.fr/simbad/sim-id?Ident=${encodeURIComponent(currentTargetName)}`;
+                window.open(simbadUrl, '_blank');
+                speakMessage(`${t('exploringSimbad')} ${currentTargetName} ${t('inSimbad')}`);
+                document.getElementById('status').innerText = `${t('statusStr')}: ${t('exploringSimbad')} SIMBAD - ${currentTargetName}`;
+                e.preventDefault();
+            } else if (e.key === 'ArrowLeft') {
+                scanDirection = -1;
+                lastPianoXMap = {};
+                lastViolinXMap = {};
+                if (isSonifying) {
+                    speakMessage(t('leftExploration'));
+                    document.getElementById('status').innerText = `${t('statusStr')}: ${t('leftExploration')}...`;
+                } else {
+                    startSonification();
+                }
+                e.preventDefault();
+            } else if (e.key === 'ArrowRight') {
+                scanDirection = 1;
+                lastPianoXMap = {};
+                lastViolinXMap = {};
+                if (isSonifying) {
+                    speakMessage(t('rightExploration'));
+                    document.getElementById('status').innerText = `${t('statusStr')}: ${t('rightExploration')}...`;
+                } else {
+                    startSonification();
+                }
+                e.preventDefault();
+            } else if (e.key === 'Enter' && document.activeElement === targetInput) {
+                const targetName = targetInput.value.trim();
+                if (targetName && aladin) {
+                    currentTargetName = targetName;
+                    aladin.gotoObject(targetName);
+                    stopAndResetSonification(false);
+                    document.getElementById('status').innerText = `${t('statusStr')}: ${t('navigatedTo')} ${targetName}.`;
+                    targetInput.value = ''; 
+                }
+                e.preventDefault();
+            }
+        });
+
+        function startSonification() {
+            if (isSonifying) return;
+            
+            const container = document.getElementById('map-container');
+            const height = container.clientHeight || window.innerHeight;
+            const width = container.clientWidth || window.innerWidth;
+
+            const leftBound = BOUNDARY_MARGIN;
+            const rightBound = Math.floor((width - BOUNDARY_MARGIN) / resolution) * resolution;
+
+            let isResuming = (currentX >= leftBound && currentX <= rightBound);
+
+            if (!isResuming) {
+                currentX = scanDirection === 1 ? leftBound : rightBound;
+                lastPianoXMap = {}; 
+                lastViolinXMap = {};
+            }
+
+            initAudio();
+
+            const dirText = scanDirection === 1 ? t('rightExploration') : t('leftExploration');
+            
+            if (isResuming && currentX > leftBound && currentX < rightBound) {
+                const msg = `${t('continuing')}, ${dirText}`;
+                speakMessage(msg);
+                document.getElementById('status').innerText = `${t('statusStr')}: ${msg}...`;
+            } else {
+                const msg = `${t('started')} ${currentTargetName}, ${dirText}`;
+                speakMessage(msg);
+                document.getElementById('status').innerText = `${t('statusStr')}: ${msg}...`;
+            }
+
+            setTimeout(() => {
+                isSonifying = true;
+
+                const scanLine = document.getElementById('scan-line');
+                scanLine.style.display = 'block';
+
+                const oneThirdMark = Math.floor(width / 3);
+                const twoThirdMark = Math.floor((width * 2) / 3);
+
+                function runScanStep() {
+                    if (!isSonifying) return;
+                    
+                    let actualDelay = Math.max(16, BASE_DELAY * speedMultiplier);
+
+                    if (currentX > rightBound || currentX < leftBound) {
+                        speakMessage(t('finished'));
+                        stopAndResetSonification(false);
+                        return;
+                    }
+
+                    let processX = currentX; 
+                    scanLine.style.left = processX + 'px';
+
+                    let nextX = processX + (scanDirection * resolution);
+                    if (scanDirection === 1) {
+                        if (processX < oneThirdMark && nextX >= oneThirdMark) speakMessage(t('oneThird'));
+                        if (processX < twoThirdMark && nextX >= twoThirdMark) speakMessage(t('twoThirds'));
+                    } else {
+                        if (processX > twoThirdMark && nextX <= twoThirdMark) speakMessage(t('twoThirds'));
+                        if (processX > oneThirdMark && nextX <= oneThirdMark) speakMessage(t('oneThird'));
+                    }
+
+                    let baseLayer = aladin ? aladin.getBaseImageLayer() : null;
+                    let potentialNotes = [];
+
+                    for (let y = BOUNDARY_MARGIN; y < height - BOUNDARY_MARGIN; y += resolution) {
+                        let brightness = 0; 
+                        
+                        if (baseLayer && typeof baseLayer.readPixel === 'function') {
+                            let pix = baseLayer.readPixel(processX, y); 
+                            if (pix !== null && pix !== undefined) {
+                                if (Array.isArray(pix)) {
+                                    brightness = 0.299 * pix[0] + 0.587 * pix[1] + 0.114 * pix[2];
+                                } else {
+                                    brightness = Number(pix);
+                                }
+                            }
+                        } 
+
+                        if (brightness === 0) {
+                            brightness = (Math.sin(y / 30) + 1) * 35 + (Math.random() * 20);
+                        }
+
+                        // Map Y position to frequency: y=0 (top) is higher pitch, y=height (bottom) is lower pitch
+                        let positionalFreq = 150 + ((height - y) / height) * 1050;
+                        let panValue = (processX / width) * 2 - 1; 
+                        let yBucket = Math.floor(y / 12); 
+
+                        if (brightness >= high_threshold) {
+                            let lastX = lastPianoXMap[yBucket] !== undefined ? lastPianoXMap[yBucket] : -999;
+                            if (Math.abs(processX - lastX) > horizontalCooldown) {
+                                potentialNotes.push({ type: 'piano', yBucket, positionalFreq, panValue, brightness });
+                            }
+                        } else if (brightness > low_threshold && brightness < high_threshold) {
+                            let lastX = lastViolinXMap[yBucket] !== undefined ? lastViolinXMap[yBucket] : -999;
+                            if (Math.abs(processX - lastX) > horizontalCooldown) {
+                                potentialNotes.push({ type: 'violin', yBucket, positionalFreq, panValue, brightness });
+                            }
+                        }
+                    }
+
+                    const MAX_POLYPHONY_PER_STEP = 12; 
+                    
+                    if (potentialNotes.length > 0) {
+                        let stepSize = Math.max(1, potentialNotes.length / MAX_POLYPHONY_PER_STEP);
+                        let limit = Math.min(potentialNotes.length, MAX_POLYPHONY_PER_STEP);
+
+                        for (let i = 0; i < limit; i++) {
+                            let note = potentialNotes[Math.floor(i * stepSize)];
+                            playTone(note.positionalFreq, note.type, 0.08, note.panValue, note.brightness);
+                            
+                            if (note.type === 'piano') {
+                                lastPianoXMap[note.yBucket] = processX; 
+                            } else {
+                                lastViolinXMap[note.yBucket] = processX;
+                            }
+                        }
+                    }
+
+                    currentX = nextX;
+                    scanInterval = setTimeout(runScanStep, actualDelay);
+                }
+
+                runScanStep();
+            }, 500);
+        }
+
+        function pauseSonification() {
+            isSonifying = false;
+            if (scanInterval) clearTimeout(scanInterval);
+            speakMessage(t('paused'));
+            document.getElementById('status').innerText = `${t('statusStr')}: ${t('paused')}.`;
+        }
+
+        function stopAndResetSonification(speakStopped = true) {
+            isSonifying = false;
+            if (scanInterval) clearTimeout(scanInterval);
+            currentX = 0; 
+            scanDirection = 1;
+            lastPianoXMap = {};
+            lastViolinXMap = {};
+            const scanLine = document.getElementById('scan-line');
+            if (scanLine) {
+                scanLine.style.display = 'none';
+                scanLine.style.left = '0px';
+            }
+            if (speakStopped) {
+                speakMessage(t('stopped'));
+            }
+            document.getElementById('status').innerText = `${t('statusStr')}: ${t('stopped')}.`;
+        }
+    </script>
+</body>
+</html>
